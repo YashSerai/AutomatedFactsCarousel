@@ -7,8 +7,12 @@ Automates the creation of Instagram/TikTok carousel slides for the "Financial My
 import os
 import json
 import textwrap
+import time
+import base64
+from io import BytesIO
 from datetime import datetime
 from dotenv import load_dotenv
+import requests
 import gspread
 from google.oauth2.service_account import Credentials
 import google.generativeai as genai
@@ -193,18 +197,112 @@ Return ONLY valid JSON. No additional text or markdown formatting.
 
 def generate_background_image(prompt):
     """
-    PLACEHOLDER FUNCTION for image generation.
-    Replace this with your actual image generation API (Stability AI, DALL-E, or "Gemini Nano Banana").
+    Generate an abstract background image using Stability AI API.
+    Falls back to gradient if API key is not configured.
 
-    For now, this creates a simple gradient background.
+    Args:
+        prompt: The topic/theme for the background image
+
+    Returns:
+        PIL Image object
     """
-    print("[INFO] Stubbed Image Gen: Creating placeholder background. Replace this function with your image gen API (e.g., Stability, DALL-E, or 'Gemini Nano Banana').")
+    stability_api_key = os.getenv("STABILITY_API_KEY")
 
+    # Check if API key is configured
+    if not stability_api_key or stability_api_key == "YOUR_STABILITY_API_KEY":
+        print("[WARNING] STABILITY_API_KEY not configured. Using gradient fallback.")
+        return _create_gradient_fallback()
+
+    # Generate a creative prompt for an abstract financial background
+    image_prompt = (
+        f"Abstract modern background for financial education content, "
+        f"professional gradient, clean minimalist design, smooth colors, "
+        f"geometric patterns, inspired by the topic: {prompt}. "
+        f"No text, no people, no specific objects. Suitable for overlaying text."
+    )
+
+    print(f"[INFO] Generating background image with Stability AI...")
+    print(f"[DEBUG] Prompt: {image_prompt[:100]}...")
+
+    try:
+        # Stability AI API endpoint
+        url = "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image"
+
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {stability_api_key}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "text_prompts": [
+                {
+                    "text": image_prompt,
+                    "weight": 1
+                },
+                {
+                    "text": "text, letters, words, people, faces, logos, cluttered, busy",
+                    "weight": -1  # Negative prompt to avoid unwanted elements
+                }
+            ],
+            "cfg_scale": 7,
+            "height": IMAGE_HEIGHT,
+            "width": IMAGE_WIDTH,
+            "samples": 1,
+            "steps": 30,
+            "style_preset": "digital-art"
+        }
+
+        # Make the API request
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+
+        if response.status_code == 200:
+            data = response.json()
+
+            # Extract the base64 image from the response
+            if "artifacts" in data and len(data["artifacts"]) > 0:
+                image_data = data["artifacts"][0]["base64"]
+                image_bytes = base64.b64decode(image_data)
+                img = Image.open(BytesIO(image_bytes))
+                print("[SUCCESS] Background image generated successfully!")
+                return img
+            else:
+                print("[WARNING] No image in response. Using fallback gradient.")
+                return _create_gradient_fallback()
+
+        elif response.status_code == 401:
+            print("[ERROR] Invalid Stability API key. Check your .env file. Using fallback gradient.")
+            return _create_gradient_fallback()
+
+        elif response.status_code == 402:
+            print("[ERROR] Insufficient credits in Stability AI account. Using fallback gradient.")
+            return _create_gradient_fallback()
+
+        else:
+            print(f"[ERROR] Stability API error (status {response.status_code}): {response.text[:200]}")
+            print("[WARNING] Using fallback gradient.")
+            return _create_gradient_fallback()
+
+    except requests.exceptions.Timeout:
+        print("[ERROR] Stability API request timed out. Using fallback gradient.")
+        return _create_gradient_fallback()
+
+    except Exception as e:
+        print(f"[ERROR] Failed to generate image with Stability AI: {e}")
+        print("[WARNING] Using fallback gradient.")
+        return _create_gradient_fallback()
+
+
+def _create_gradient_fallback():
+    """
+    Create a simple gradient background as a fallback.
+    This is used when the Stability AI API is not available.
+    """
     # Create a gradient image from dark blue to purple
     img = Image.new('RGB', (IMAGE_WIDTH, IMAGE_HEIGHT))
     draw = ImageDraw.Draw(img)
 
-    # Create a vertical gradient
+    # Create a vertical gradient with more variety
     for y in range(IMAGE_HEIGHT):
         # Interpolate between dark blue (20, 30, 80) and purple (80, 40, 120)
         ratio = y / IMAGE_HEIGHT
